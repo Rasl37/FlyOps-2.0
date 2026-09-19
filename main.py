@@ -1,92 +1,133 @@
+import os
+import sys
 import json
 import time
 import random
 import threading
-from prometheus_client import start_http_server, Counter, Gauge
+import urllib.request
+import urllib.error
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
-# 1. Загрузка графа
+NODE_ID = os.environ.get("NODE_ID", "ORN_apple_1")
+
+# Приводим имя нейрона к допустимому DNS-имени Kubernetes (без подчеркиваний)
+def to_k8s_name(nid: str) -> str:
+    return nid.lower().replace("_", "-")
+
+# Читаем топологию
 with open('topology.json', 'r', encoding='utf-8') as f:
     topo = json.load(f)
 
-nodes = topo['nodes']
-edges = topo['edges']
+my_node = next((n for n in topo['nodes'] if n['id'] == NODE_ID), {"id": NODE_ID, "layer": "Processing"})
+layer = my_node.get('layer', 'Processing')
+outgoing_edges = [e for e in topo['edges'] if e['source'] == NODE_ID]
 
-# 2. Метрики с точными лейблами для Grafana Node Graph
-EDGE_SPIKES = Counter(
-    'flyops_edge_spikes_total',
-    'Spikes transmitted over connectome edge',
-    ['id', 'source', 'target']
-)
+# Метрики Prometheus для Grafana Node Graph
+SPIKES_TOTAL = Counter('flyops_node_spikes_total', 'Spikes processed', ['id', 'title', 'subtitle'])
+EDGE_SPIKES = Counter('flyops_edge_spikes_total', 'Spikes transmitted', ['id', 'source', 'target'])
+NODE_STATUS = Gauge('flyops_node_status', 'Status: 1=Healthy, 0=Degraded', ['id'])
+EDGE_STATUS = Gauge('flyops_edge_status', 'Edge status: 1=OK, 0=Failed', ['id', 'source', 'target'])
 
-NODE_SPIKES = Counter(
-    'flyops_node_spikes_total',
-    'Spikes processed by neuron',
-    ['id', 'title', 'subtitle']
-)
+# Прогрев метрик при старте
+SPIKES_TOTAL.labels(id=NODE_ID, title=NODE_ID, subtitle=layer).inc(0)
+NODE_STATUS.labels(id=NODE_ID).set(1)
 
-NODE_STATUS = Gauge(
-    'flyops_node_status',
-    'Neuron operational status: 1 active, 0 degraded',
-    ['id']
-)
-
-# 3. Предварительный прогрев нулями всех узлов и ребер
-for n in nodes:
-    n_id = n['id']
-    layer = n.get('layer', 'Processing')
-    NODE_SPIKES.labels(id=n_id, title=n_id, subtitle=layer).inc(0)
-    NODE_STATUS.labels(id=n_id).set(1)
-
-for e in edges:
-    src = e['source']
+for e in outgoing_edges:
     tgt = e['target']
-    edge_id = f"{src}--{tgt}"
-    EDGE_SPIKES.labels(id=edge_id, source=src, target=tgt).inc(0)
+    eid = f"{NODE_ID}--{tgt}"
+    EDGE_SPIKES.labels(id=eid, source=NODE_ID, target=tgt).inc(0)
+    EDGE_STATUS.labels(id=eid, source=NODE_ID, target=tgt).set(1)
+
+def forward_impulse():
+    SPIKES_TOTAL.labels(id=NODE_ID, title=NODE_ID, subtitle=layer).inc()
+    if not outgoing_edges:
+        return
+
+    failed_edges = []
+    success_count = 0
+
+    for e in outgoing_edges:
+        tgt = e['target']
+        eid = f"{NODE_ID}--{tgt}"
+        k8s_host = to_k8s_name(tgt)
+        url = f"http://{k8s_host}:8000/fire"
+
+        try:
+            req = urllib.request.Request(
+                url, 
+                data=b'{"impulse": 1}', 
+                headers={'Content-Type': 'application/json'}, 
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    EDGE_SPIKES.labels(id=eid, source=NODE_ID, target=tgt).inc()
+                    EDGE_STATUS.labels(id=eid, source=NODE_ID, target=tgt).set(1)
+                    success_count += 1
+        except Exception as err:
+            print(f"[{NODE_ID}] Ошибка синапса к {tgt} ({k8s_host}): {err}")
+            EDGE_STATUS.labels(id=eid, source=NODE_ID, target=tgt).set(0)
+            failed_edges.append(e)
+
+    # Механизм нейропластичности / Failover:
+    # Если целевой под убит, перенаправляем импульс по альтернативным живым путям
+    if failed_edges and success_count > 0:
+        print(f"[{NODE_ID}] Резервный путь активирован: перенаправление импульса в обход сбоя!")
+        for e in outgoing_edges:
+            if e not in failed_edges:
+                tgt = e['target']
+                eid = f"{NODE_ID}--{tgt}"
+                EDGE_SPIKES.labels(id=eid, source=NODE_ID, target=tgt).inc()
+
+    if outgoing_edges and success_count == 0:
+        NODE_STATUS.labels(id=NODE_ID).set(0)
+    else:
+        NODE_STATUS.labels(id=NODE_ID).set(1)
+
+class NeuronHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/healthz':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        elif self.path == '/metrics':
+            self.send_response(200)
+            self.send_header('Content-Type', CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(generate_latest())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path == '/fire':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status": "received"}')
 
 
-# 4. Логика симуляции импульсов
-def run_simulation():
-    targets_set = {e['target'] for e in edges}
-    roots = [n['id'] for n in nodes if n['id'] not in targets_set]
-    if not roots:
-        roots = [nodes[0]['id']]
+# Запускаем пересылку дальше в отдельном потоке
+            threading.Thread(target=forward_impulse, daemon=True).start()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
-    # Карта для быстрого поиска слоев
-    layer_map = {n['id']: n.get('layer', 'Processing') for n in nodes}
+    def log_message(self, format, *args):
+        # Отключаем спам HTTP-логов в консоль
+        return
 
+def sensory_loop():
+    print(f"[{NODE_ID}] Сенсор активен. Генерация стимулов раз в 4-7 сек...")
     while True:
-        # Старт от одного из входных сенсорных нейронов
-        source = random.choice(roots)
-        NODE_SPIKES.labels(id=source, title=source, subtitle=layer_map[source]).inc()
-
-        current = [source]
-        while current:
-            next_layer = []
-            for curr_node in current:
-                out_edges = [e for e in edges if e['source'] == curr_node]
-                for e in out_edges:
-                    src = e['source']
-                    tgt = e['target']
-                    weight = e.get('weight', 500)
-
-                    # Вероятность проведения импульса зависит от веса синапса
-                    prob = min(0.95, weight / 1500)
-                    if random.random() < prob:
-                        edge_id = f"{src}--{tgt}"
-                        EDGE_SPIKES.labels(id=edge_id, source=src, target=tgt).inc()
-                        NODE_SPIKES.labels(id=tgt, title=tgt, subtitle=layer_map[tgt]).inc()
-                        next_layer.append(tgt)
-            current = list(set(next_layer))
-            time.sleep(0.1)
-
-        time.sleep(random.uniform(0.3, 0.8))
-
+        time.sleep(random.uniform(4.0, 7.0))
+        print(f"[{NODE_ID}] Импульс сгенерирован!")
+        forward_impulse()
 
 if __name__ == '__main__':
-    start_http_server(8000)
-    print("FlyOps Simulator metrics exposed on :8000/metrics")
-    sim_thread = threading.Thread(target=run_simulation, daemon=True)
-    sim_thread.start()
+    print(f"Запуск нейрона: {NODE_ID} ({layer}) на порту 8000")
+    if layer == 'Sensory':
+        threading.Thread(target=sensory_loop, daemon=True).start()
 
-    while True:
-        time.sleep(1)
+    server = HTTPServer(('0.0.0.0', 8000), NeuronHandler)
+    server.serve_forever()
