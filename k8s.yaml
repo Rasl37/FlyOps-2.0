@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flyops-simulator
+  labels:
+    app: flyops-simulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flyops-simulator
+  template:
+    metadata:
+      labels:
+        app: flyops-simulator
+    spec:
+      containers:
+      - name: simulator
+        image: flyops-simulator:latest
+        imagePullPolicy: Never
+        ports:
+        - name: metrics
+          containerPort: 8000
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flyops-simulator-svc
+  labels:
+    app: flyops-simulator
+spec:
+  selector:
+    app: flyops-simulator
+  ports:
+  - name: metrics
+    port: 8000
+    targetPort: 8000
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: flyops-simulator-monitor
+  labels:
+    release: monitoring-stack
+spec:
+  selector:
+    matchLabels:
+      app: flyops-simulator
+  endpoints:
+  - port: metrics
+    interval: 5s
+    path: /metrics
