@@ -1,0 +1,207 @@
+{
+  "nodes": [
+    {
+      "id": "neuron-7776",
+      "full_id": "720575940640987776"
+    },
+    {
+      "id": "neuron-8152",
+      "full_id": "720575940624358152"
+    },
+    {
+      "id": "neuron-3323",
+      "full_id": "720575940616733323"
+    },
+    {
+      "id": "neuron-0115",
+      "full_id": "720575940621460115"
+    },
+    {
+      "id": "neuron-4490",
+      "full_id": "720575940633454490"
+    },
+    {
+      "id": "neuron-7505",
+      "full_id": "720575940654777505"
+    },
+    {
+      "id": "neuron-4211",
+      "full_id": "720575940640834211"
+    },
+    {
+      "id": "neuron-6929",
+      "full_id": "720575940620196929"
+    },
+    {
+      "id": "neuron-8386",
+      "full_id": "720575940614808386"
+    },
+    {
+      "id": "neuron-9284",
+      "full_id": "720575940622009284"
+    },
+    {
+      "id": "neuron-6298",
+      "full_id": "720575940627796298"
+    },
+    {
+      "id": "neuron-6515",
+      "full_id": "720575940633746515"
+    },
+    {
+      "id": "neuron-3706",
+      "full_id": "720575940639023706"
+    },
+    {
+      "id": "neuron-5791",
+      "full_id": "720575940618455791"
+    },
+    {
+      "id": "neuron-0404",
+      "full_id": "720575940621820404"
+    },
+    {
+      "id": "neuron-7877",
+      "full_id": "720575940614837877"
+    },
+    {
+      "id": "neuron-0420",
+      "full_id": "720575940620610420"
+    },
+    {
+      "id": "neuron-5979",
+      "full_id": "720575940631625979"
+    },
+    {
+      "id": "neuron-4991",
+      "full_id": "720575940622324991"
+    }
+  ],
+  "edges": [
+    {
+      "source": "neuron-4211",
+      "target": "neuron-7505",
+      "weight": 226
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-0115",
+      "weight": 163
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-5791",
+      "weight": 162
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-4490",
+      "weight": 124
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-9284",
+      "weight": 114
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-6515",
+      "weight": 113
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-7877",
+      "weight": 112
+    },
+    {
+      "source": "neuron-4211",
+      "target": "neuron-7776",
+      "weight": 112
+    },
+    {
+      "source": "neuron-6515",
+      "target": "neuron-4991",
+      "weight": 168
+    },
+    {
+      "source": "neuron-7505",
+      "target": "neuron-5979",
+      "weight": 161
+    },
+    {
+      "source": "neuron-5791",
+      "target": "neuron-6515",
+      "weight": 152
+    },
+    {
+      "source": "neuron-0115",
+      "target": "neuron-6515",
+      "weight": 135
+    },
+    {
+      "source": "neuron-4490",
+      "target": "neuron-3323",
+      "weight": 124
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-6929",
+      "weight": 456
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-0404",
+      "weight": 246
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-8386",
+      "weight": 234
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-6298",
+      "weight": 170
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-3706",
+      "weight": 148
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-8152",
+      "weight": 145
+    },
+    {
+      "source": "neuron-3323",
+      "target": "neuron-0420",
+      "weight": 132
+    },
+    {
+      "source": "neuron-0404",
+      "target": "neuron-3323",
+      "weight": 386
+    },
+    {
+      "source": "neuron-6298",
+      "target": "neuron-6929",
+      "weight": 266
+    },
+    {
+      "source": "neuron-6929",
+      "target": "neuron-6298",
+      "weight": 201
+    },
+    {
+      "source": "neuron-6298",
+      "target": "neuron-3323",
+      "weight": 178
+    },
+    {
+      "source": "neuron-6298",
+      "target": "neuron-3706",
+      "weight": 140
+    }
+  ]
+}
