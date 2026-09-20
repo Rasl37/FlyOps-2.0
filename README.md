@@ -24,6 +24,10 @@
 * **Service Discovery:** прямое межсервисное взаимодействие через Kubernetes CoreDNS (`http://<имя-нейрона>:8000/fire`).
 * **Топологический движок:** каждый микросервис при старте вычисляет свою функциональную роль (`Sensory`, `Processing`, `Motor`) на основе входящих и исходящих ребер из `topology.json`.
 
+<p align="center">
+  <img src="docs/Screenshot_2.png" alt="Статус всех подов нейронов в кластере" width="850">
+</p>
+
 ---
 
 ## Инженерные механизмы
@@ -42,9 +46,13 @@
 
 ---
 
-## Observability и сбор метрик
+## Observability и визуализация (Grafana Node Graph)
 
 Каждый микросервис отдает нативный эндпоинт `/metrics` в формате Prometheus. Структура метрик адаптирована для прямой отрисовки топологии в **Grafana Node Graph Panel**:
+
+<p align="center">
+  <img src="docs/Screenshot_1.png" alt="Grafana Node Graph - топология спайков" width="850">
+</p>
 
 ### Экспортируемые метрики
 
@@ -55,34 +63,36 @@
 | `flyops_node_status` | Gauge | `id` | Рабочий статус узла (`1` = Healthy, `0` = Degraded) |
 | `flyops_edge_status` | Gauge | `id`, `source`, `target` | Статус связи (`1` = Доступен, `0` = Ошибка сети) |
 
-### Запросы PromQL для Grafana Node Graph
+### Запросы PromQL для панели
 
-* **Запрос для узлов (Nodes Query):**
-  ```promql
-  flyops_node_status
-  ```
-* **Запрос для ребер (Edges Query):**
-  ```promql
-  rate(flyops_edge_spikes_total[1m])
-  ```
+* **Узлы (Nodes Query):** `flyops_node_status`
+* **Ребра (Edges Query):** `rate(flyops_edge_spikes_total[1m])`
 
 ---
 
-## Фиксация сценариев отказоустойчивости
+## Проверка сценариев отказоустойчивости
 
-### Сценарий 1: L7-перемаршрутизация прикладного уровня (Нейропластичность)
-При отключении downstream-узла `neuron-8152` маршрутизирующий нейрон `neuron-3323` перехватывает системную сетевую ошибку и направляет импульс по резервным синапсам:
+### 1. L7-перемаршрутизация прикладного уровня (Нейропластичность)
+При искусственном отключении целевого узла `neuron-8152` маршрутизирующий узел `neuron-3323` перехватывает ошибку сокета и перенаправляет импульс по резервным синапсам:
+
+<p align="center">
+  <img src="docs/Screenshot_3.png" alt="L7 Failover - Активация резервно
+
+
+го пути" width="850">
+</p>
 
 ```text
 [neuron-3323] Ошибка синапса к neuron-8152 (neuron-8152): <urlopen error [Errno 111] Connection refused>
 [neuron-3323] Резервный путь активирован: перенаправление импульса в обход сбоя!
 ```
 
-### Сценарий 2: L4-самовосстановление инфраструктуры (Kubernetes Self-He
+### 2. L4-самовосстановление инфраструктуры (Kubernetes Self-Healing)
+Мгновенное удаление критического узкого горлышка (`neuron-4490`) инициирует автоматическое поднятие новой реплики контроллером ReplicaSet из локального кэша за считанные секунды:
 
-
-aling)
-Удаление критического узкого горлышка (`neuron-4490`) инициирует автоматическое поднятие новой реплики из локального кэша образов:
+<p align="center">
+  <img src="docs/Screenshot_4.png" alt="L4 Self-Healing - Мгновенное пересоздание пода" width="850">
+</p>
 
 ```bash
 kubectl delete pod -n monitoring -l app=neuron-4490 --now && \
@@ -91,7 +101,6 @@ kubectl delete pod -n monitoring -l app=neuron-4490 --now && \
   echo "--- 2. RECOVERED ---" && kubectl get pods -n monitoring -l app=neuron-4490
 ```
 
-**Результат выполнения в терминале:**
 ```text
 pod "neuron-4490-64cffdc7b7-lb28r" deleted from monitoring namespace
 --- 1. CREATING (AGE 1s) ---
@@ -119,13 +128,13 @@ kubectl create namespace monitoring
 
 ### 2. Сборка и развертывание
 ```bash
-# Переключение сборщика на Docker Minikube
+# Переключение окружения на Docker Minikube
 eval $(minikube docker-env)
 
 # Сборка образа внутри кластера
 docker build -t flyops-neuron:latest .
 
-# Развертывание всех манифестов
+# Развертывание манифестов
 kubectl apply -f k8s/ -n monitoring
 ```
 
@@ -137,7 +146,7 @@ kubectl get pods -n monitoring -l role=neuron
 ---
 
 ## Стек технологий
-* **Среда исполнения:** Python 3.11 (стандартные библиотеки `http.server`, `urllib`, `threading`)
-* **Оркестрация и сеть:** Kubernetes (Deployments, Services, CoreDNS Service Discovery)
+* **Среда исполнения:** Python 3.11 (`http.server`, `urllib`, `threading`)
+* **Оркестрация и сеть:** Kubernetes (Deployments, Services, CoreDNS)
 * **Сбор метрик:** Prometheus Client Python (`prometheus_client`)
 * **Визуализация топологии:** Grafana (Node Graph API)
