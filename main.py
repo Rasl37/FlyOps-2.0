@@ -9,31 +9,27 @@ import urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
-# ID текущего нейрона из env пода
 NODE_ID = os.environ.get("NODE_ID", "neuron-4490")
 
 def to_k8s_name(nid: str) -> str:
-    """Приводит идентификатор нейрона к валидному DNS-имени Kubernetes."""
     return nid.lower().replace("_", "-")
 
-# 1. Загрузка топологии
 with open('topology.json', 'r', encoding='utf-8') as f:
     topo = json.load(f)
 
-# 2. Автоматическое определение биологического слоя
 all_sources = {e['source'] for e in topo['edges']}
 all_targets = {e['target'] for e in topo['edges']}
 
 if NODE_ID not in all_targets:
-    layer = "Sensory"       # Входной рецептор (нет входящих связей)
+    layer = "Sensory"
 elif NODE_ID not in all_sources:
-    layer = "Motor"         # Исполнительный узел (нет исходящих связей)
+    layer = "Motor"
 else:
-    layer = "Processing"    # Промежуточный узел обработки
+    layer = "Processing"
 
 outgoing_edges = [e for e in topo['edges'] if e['source'] == NODE_ID]
 
-# 3. Метрики Prometheus
+# Prometheus metrics setup
 SPIKES_TOTAL = Counter(
     'flyops_node_spikes_total',
     'Total spikes processed by this neuron',
@@ -55,7 +51,6 @@ EDGE_STATUS = Gauge(
     ['id', 'source', 'target']
 )
 
-# Прогрев метрик
 SPIKES_TOTAL.labels(id=NODE_ID, title=NODE_ID, subtitle=layer).inc(0)
 NODE_STATUS.labels(id=NODE_ID).set(1)
 
@@ -65,12 +60,10 @@ for e in outgoing_edges:
     EDGE_SPIKES.labels(id=eid, source=NODE_ID, target=tgt).inc(0)
     EDGE_STATUS.labels(id=eid, source=NODE_ID, target=tgt).set(1)
 
-# 4. Защита от шторма запросов (Биологический рефрактерный период)
 LAST_SPIKE_TIME = 0.0
-REFRACTORY_PERIOD = 0.4  # Минимальный интервал между спайками — 400 мс
+REFRACTORY_PERIOD = 0.4  # Prevents feedback loops and retry storms
 spike_lock = threading.Lock()
 
-# 5. Передача спайка по исходящим синапсам
 def forward_impulse():
     SPIKES_TOTAL.labels(id=NODE_ID, title=NODE_ID, subtitle=layer).inc()
     if not outgoing_edges:
@@ -102,7 +95,7 @@ def forward_impulse():
             EDGE_STATUS.labels(id=eid, source=NODE_ID, target=tgt).set(0)
             failed_edges.append(e)
 
-    # Failover / Нейропластичность: перенаправление на живые синапсы
+    # L7 dynamic rerouting via healthy synapses
     if failed_edges and success_count > 0:
         print(f"[{NODE_ID}] Резервный путь активирован: перенаправление импульса в обход сбоя!")
         for e in outgoing_edges:
@@ -117,10 +110,6 @@ def forward_impulse():
         NODE_STATUS.labels(id=NODE_ID).set(1)
 
 def handle_incoming_fire():
-    """Фильтрует входящие спайки, отсекая эхо-запросы из биологических петел
-
-
-ь."""
     global LAST_SPIKE_TIME
     with spike_lock:
         now = time.time()
@@ -129,7 +118,6 @@ def handle_incoming_fire():
         LAST_SPIKE_TIME = now
     forward_impulse()
 
-# 6. HTTP Сервер
 class NeuronHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/healthz':
@@ -138,7 +126,10 @@ class NeuronHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"OK")
         elif self.path == '/metrics':
             self.send_response(200)
-            self.send_header('Content-Type', CONTENT_TYPE_LATEST)
+            self.send_header('Content-Type', CONTENT_TYPE_LATEST
+
+
+)
             self.end_headers()
             self.wfile.write(generate_latest())
         else:
@@ -147,7 +138,6 @@ class NeuronHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == '/fire':
-            # Сразу закрываем HTTP 200, глуша обрывы сокетов
             try:
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -178,5 +168,7 @@ if __name__ == '__main__':
         print(f"[{NODE_ID}] Корневой узел топологии. Запуск генератора импульсов.")
         threading.Thread(target=sensory_loop, daemon=True).start()
 
+    server = HTTPServer(('0.0.0.0', 8000), NeuronHandler)
+    server.serve_forever()
     server = HTTPServer(('0.0.0.0', 8000), NeuronHandler)
     server.serve_forever()
