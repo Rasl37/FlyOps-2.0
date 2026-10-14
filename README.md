@@ -1,98 +1,90 @@
-# FlyOps 2.0: Учебный микросервисный стенд в Kubernetes
+# FlyOps 2.0: Микросервисный стенд в Kubernetes
 
-[![Kubernetes](https://img.shields.io/badge/Orchestration-Kubernetes%20v1.28%2B-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
-[![Prometheus](https://img.shields.io/badge/Monitoring-Prometheus%20Operator-E6522C?logo=prometheus&logoColor=white)](https://prometheus.io/)
-[![Grafana](https://img.shields.io/badge/Visualization-Grafana%20Node%20Graph-F46800?logo=grafana&logoColor=white)](https://grafana.com/)
-[![Docker](https://img.shields.io/badge/Containerization-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Python](https://img.shields.io/badge/Runtime-Python%203.11%20AsyncIO-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[English](README.en.md) | **Русский**
 
-> [English version](README.en.md) | **Русская версия**
+Учебный стенд для практики с Kubernetes, микросервисами и мониторингом. В кластере развернуто 19 взаимодействующих сервисов на базе Minikube.
 
-Практический проект для отработки навыков системного инжиниринга и DevOps: кластер из 19 взаимодействующих микросервисов внутри **Kubernetes (Minikube)**.
-
-За основу топологии связей взята графовая структура нейронной цепочки (коннектом дрозофилы), что дает сложную, разветвленную сеть зависимостей. На этом стенде я исследовал и настроил ключевые механизмы отказоустойчивости, маршрутизации и мониторинга микросервисов.
+Топология сети взята из схемы связей нейронов (Drosophila connectome) — это дало разветвленную сеть с перекрестными зависимостями, на которой удобно тестировать отказ узлов, перемаршрутизацию запросов и мониторинг.
 
 ---
 
-## 🎯 Что реализовано и протестировано:
+## Что сделано в проекте:
 
-1. **Развертывание в Kubernetes:** 19 подов с независимыми ресурсами CPU/RAM, пробами `livenessProbe` / `readinessProbe` и сервисами через Kube-DNS / CoreDNS.
-2. **Отказоустойчивость инфраструктуры (L4):** проверка реакции Kubernetes ReplicaSet при принудительном удалении пода (`kubectl delete pod`) — под автоматически пересоздается и возвращается в строй за 3 секунды.
-3. **Отказоустойчивость приложения (L7 failover):** обработка ошибок сети (код `Errno 111 Connection refused`). Если соседний сервис недоступен, микросервис мгновенно перенаправляет запрос по резервному маршруту.
-4. **Защита от перегрузки (Rate Limiting):** защита от шторма запросов с отсечением избыточного трафика кодом HTTP 429, предотвращающая падение нод по памяти (OOMKilled).
-5. **Сбор метрик и мониторинг:** экспорт метрик в Prometheus через `ServiceMonitor` (CRD Prometheus Operator) и построение живого дашборда с топологией в **Grafana (Node Graph)**.
+- **Развертывание в Kubernetes:** 19 подов с ограничениями по ресурсам (CPU/RAM), пробами `livenessProbe` / `readinessProbe` и внутренним DNS (CoreDNS).
+- **Восстановление при падении узлов (L4):** при удалении пода (`kubectl delete pod`) ReplicaSet поднимает новый контейнер за 3 секунды.
+- **Резервные маршруты в коде (L7):** перехват ошибки `Errno 111 Connection refused`. Если соседний сервис недоступен, запрос автоматически уходит по резервному пути.
+- **Ограничение частоты запросов:** защита от флуда с возвратом HTTP 429, чтобы сервисы не уходили в OOMKilled при резком росте нагрузки.
+- **Мониторинг:** экспорт метрик в Prometheus через `ServiceMonitor` и дашборд с графом связей в Grafana (Node Graph).
 
 ---
 
-## 📐 Архитектура стенда
+## Схема взаимодействия
 
-Каждый узел — это независимый Python-микросервис в Docker-контейнере. Узлы общаются напрямую через HTTP/REST по внутренним именам CoreDNS (`http://neuron-XX.flyops.svc.cluster.local:8080/stimulate`):
+Каждый узел — это сервис на Python (aiohttp) в Docker-контейнере. Сервисы общаются между собой по HTTP внутри кластера:
 
 ```
-                         [ ВНЕШНИЙ ЗАПРОС / ТРИГГЕР ]
-                                      |
-                                      v
+                         [ Входящий запрос ]
+                                  |
+                                  v
 +=======================================================================================+
-| ВХОДНОЙ СЛОЙ (Сенсоры / Ingress: Neuron 01-04)                                        |
+| Входной слой (сервисы 01-04)                                                          |
 +=======================================================================================+
-                                      |
-                                      v
+                                  |
+                                  v
 +=======================================================================================+
-| ПРОМЕЖУТОЧНЫЙ СЛОЙ (Маршрутизация и обработка: Neuron 05-14)                          |
+| Промежуточный слой (сервисы 05-14)                                                    |
 |                                                                                       |
-|   Основной путь: Neu-09 -> Neu-10 -> Neu-11 -> Neu-12                                 |
-|                                                                                       |
-|   Резервный путь (L7 Failover): при сбое узла -> Neu-13/14 -> альтернативный выход     |
+|   Основной маршрут: 09 -> 10 -> 11 -> 12                                              |
+|   Резервный маршрут: при недоступности узла запрос переключается на 13/14             |
 +=======================================================================================+
-                                      |
-                                      v
+                                  |
+                                  v
 +=======================================================================================+
-| ВЫХОДНОЙ СЛОЙ (Исполнители / Output: Neuron 15-19)                                    |
+| Выходной слой (сервисы 15-19)                                                         |
 +=======================================================================================+
 ```
 
 <p align="center">
   <img src="docs/Screenshot_1.png" alt="Схема связей стенда" width="850">
   <br>
-  <em>Схема связей между микросервисами и маршруты передачи запросов.</em>
+  <em>Схема связей между сервисами.</em>
 </p>
 
 <p align="center">
   <img src="docs/Screenshot_2.png" alt="Поды в кластере Kubernetes" width="850">
   <br>
-  <em>Состояние подов в namespace flyops: каждый микросервис работает изолированно.</em>
+  <em>Запущенные поды в пространстве имен flyops.</em>
 </p>
 
 ---
 
-## 🛠️ Практические тесты отказоустойчивости (Chaos Testing)
+## Тестирование отказоустойчивости
 
-### Тест 1. Падение пода под нагрузкой (L4 Self-Healing)
-Проверяем работу оркестратора: принудительно убиваем ключевой узел сети и замеряем время восстановления:
+### 1. Падение пода (L4 Self-Healing)
+Удаляем работающий под и смотрим на реакцию кластера:
 
 ```bash
 kubectl delete pod -n flyops -l app=neuron-4490 --now && kubectl get pods -n flyops -l app=neuron-4490
 ```
 
-**Результат:** Kubernetes моментально фиксирует несоответствие желаемого числа реплик и поднимает новый чистый под за **3 секунды**.
+Kubernetes видит расхождение в ReplicaSet и запускает новый под за 3 секунды.
 
 <p align="center">
   <img src="docs/Screenshot_4.png" alt="Восстановление пода" width="850">
   <br>
-  <em>Лог терминала: уничтоженный под автоматически пересоздан и работает через 3 секунды.</em>
+  <em>Восстановление пода после удаления.</em>
 </p>
 
 ---
 
-### Тест 2. Перемаршрутизация при сетевой ошибке (L7 Failover)
-Удаляем промежуточный узел, на который прямо сейчас идут запросы:
+### 2. Перемаршрутизация при сетевом сбое (L7 Failover)
+Удаляем промежуточный узел во время передачи данных:
 
 ```bash
 kubectl delete pod -n flyops -l app=neuron-8152 --now
 ```
 
-**Результат:** Вышестоящий сервис ловит ошибку сокета (`[Errno 111] Connection refused`) и, вместо того чтобы падать с ошибкой 500, переключается на запасной маршрут:
+Сервис-отправитель перехватывает ошибку сокета (`[Errno 111] Connection refused`) и отправляет запрос на резервный адрес:
 
 ```python
 async def forward_pulse(primary_target: str, fallback_target: str, payload: dict):
@@ -104,7 +96,7 @@ async def forward_pulse(primary_target: str, fallback_target: str, payload: dict
                     return await resp.json()
     except (asyncio.TimeoutError, aiohttp.ClientError):
         METRICS_FAILOVER.inc()
-        # Переключение на резервный маршрут
+        # Переключение на резервный адрес
         async with aiohttp.ClientSession() as session:
             async with session.post(fallback_target, json=payload, timeout=0.050) as resp:
                 METRICS_FORWARDED.labels(status="success", route="fallback").inc()
@@ -112,15 +104,15 @@ async def forward_pulse(primary_target: str, fallback_target: str, payload: dict
 ```
 
 <p align="center">
-  <img src="docs/Screenshot_3.png" alt="Лог L7 фейловера" width="850">
+  <img src="docs/Screenshot_3.png" alt="Лог переключения маршрута" width="850">
   <br>
-  <em>Терминал фиксирует перехват ошибки Errno 111 и успешную отправку по запасному пути.</em>
+  <em>Перехват ошибки Errno 111 и отправка по запасному пути.</em>
 </p>
 
 ---
 
-### Тест 3. Стресс-тест и ограничение нагрузки (Rate Limiter)
-Имитируем шторм входящих запросов утилитой `hey` (100+ запросов в секунду):
+### 3. Нагрузочный тест и отсечение флуда
+Подаем поток запросов утилитой `hey`:
 
 ```bash
 hey -n 500 -c 10 -m POST \
@@ -129,46 +121,46 @@ hey -n 500 -c 10 -m POST \
   http://$(minikube ip):$(kubectl get svc neuron-01 -n flyops -o jsonpath='{.spec.ports[0].nodePort}')/stimulate
 ```
 
-**Результат:** Сервис пропускает 1 запрос в установленный интервал (400 мс), а избыточный паразитный флуд отсекает кодом `HTTP 429`. Процессор и память узла не перегружаются, кластер остается стабильным.
+Сервис обрабатывает не более одного запроса за 400 мс, а лишний трафик сбрасывает с кодом 429. Потребление памяти и процессора остается стабильным.
 
 ---
 
-## 📊 Мониторинг и метрики (Prometheus & Grafana)
+## Метрики (Prometheus и Grafana)
 
-Каждый под отдает метрики в формате OpenMetrics на порту `:8080/metrics`:
+Каждый под отдает метрики на порту `:8080/metrics`:
 
 | Метрика | Тип | Назначение |
 | :--- | :--- | :--- |
-| `flyops_spikes_received_total` | Counter | Количество входящих запросов на микросервис |
-| `flyops_spikes_forwarded_total` | Counter | Успешно переданные запросы downstream |
-| `flyops_refractory_drops_total` | Counter | Количество запросов, заблокированных рейт-лимитером |
-| `flyops_l7_failover_events_total` | Counter | Количество переключений на резервные маршруты из-за недоступности сокета |
-| `flyops_propagation_latency_seconds` | Histogram | Задержка сетевого ответа между сервисами |
+| `flyops_spikes_received_total` | Counter | Количество входящих запросов |
+| `flyops_spikes_forwarded_total` | Counter | Успешно отправленные дальше запросы |
+| `flyops_refractory_drops_total` | Counter | Запросы, отсеченные лимитером (HTTP 429) |
+| `flyops_l7_failover_events_total` | Counter | Срабатывания переключения на резервный путь |
+| `flyops_propagation_latency_seconds` | Histogram | Время сетевого ответа между сервисами |
 
-Метрики собираются автоматически через `ServiceMonitor` и визуализируются в дашборде **Grafana Node Graph**, где отображаются активные связи и задержки.
+Сбор метрик настроен через `ServiceMonitor`. Для визуализации используется Grafana Node Graph.
 
 ---
 
-## 🚀 Как запустить локально
+## Запуск проекта
 
 ### Требования:
-- Linux (Ubuntu / Debian) или WSL2
+- Linux / WSL2
 - Docker, Minikube, kubectl, Helm v3+
 
-### Запуск кластера и мониторинга:
+### Команды для запуска:
 
 ```bash
-# 1. Запуск Minikube с запасом ресурсов под поды и мониторинг
+# 1. Запуск Minikube
 minikube start --cpus=4 --memory=8192 --disk-size=25g --driver=docker
 
-# 2. Установка стека мониторинга (Prometheus Operator + Grafana)
+# 2. Установка стека мониторинга
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
 helm install monitoring-stack prometheus-community/kube-prometheus-stack \
   --namespace monitoring --create-namespace \
   --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
 
-# 3. Применение манифестов приложения
+# 3. Деплой манифестов
 kubectl apply -f k8s/00-namespace.yaml
 kubectl apply -f k8s/01-configmap-topology.yaml
 kubectl apply -f k8s/02-neurons-sensory.yaml
@@ -176,18 +168,18 @@ kubectl apply -f k8s/03-neurons-inter.yaml
 kubectl apply -f k8s/04-neurons-motor.yaml
 kubectl apply -f k8s/05-servicemonitor.yaml
 
-# 4. Проверка запуска подов
+# 4. Проверка статуса
 kubectl get pods -n flyops
 ```
 
 ---
 
-## 📁 Структура проекта
+## Структура репозитория
 
 ```
 FlyOps-2.0/
-├── docs/                             # Скриншоты тестов и метрик
-├── k8s/                              # Декларативные манифесты Kubernetes
+├── docs/                             # Скриншоты работы стенда
+├── k8s/                              # Манифесты Kubernetes
 │   ├── 00-namespace.yaml
 │   ├── 01-configmap-topology.yaml
 │   ├── 02-neurons-sensory.yaml
@@ -195,16 +187,16 @@ FlyOps-2.0/
 │   ├── 04-neurons-motor.yaml
 │   └── 05-servicemonitor.yaml
 ├── monitoring/
-│   ├── grafana-nodegraph-dash.json   # Дашборд Grafana Node Graph
-│   └── prometheus-rules.yaml         # Правила алертов Prometheus
+│   ├── grafana-nodegraph-dash.json   # Дашборд Grafana
+│   └── prometheus-rules.yaml         # Правила алертов
 ├── src/
-│   ├── app.py                        # Асинхронный HTTP-сервер микросервиса (aiohttp)
-│   ├── config.py                     # Загрузка топологии и настроек
-│   ├── metrics.py                    # Регистрация метрик Prometheus
-│   └── Dockerfile                    # Сборка легковесного контейнера
+│   ├── app.py                        # Код сервиса на aiohttp
+│   ├── config.py                     # Загрузка конфигурации
+│   ├── metrics.py                    # Метрики Prometheus
+│   └── Dockerfile                    # Сборка образа
 ├── scripts/
-│   ├── stimulate.sh                  # Скрипт отправки тестовых запросов
-│   └── chaos_kill_node.sh            # Скрипт симуляции падения подов
+│   ├── stimulate.sh                  # Отправка тестовых запросов
+│   └── chaos_kill_node.sh            # Скрипт симуляции сбоев
 └── README.md
 ```
 
