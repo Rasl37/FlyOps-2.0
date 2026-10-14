@@ -1,4 +1,4 @@
-# FlyOps 2.0: Resilient Drosophila Connectome Mesh in Kubernetes
+# FlyOps 2.0: Учебный микросервисный стенд в Kubernetes
 
 [![Kubernetes](https://img.shields.io/badge/Orchestration-Kubernetes%20v1.28%2B-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![Prometheus](https://img.shields.io/badge/Monitoring-Prometheus%20Operator-E6522C?logo=prometheus&logoColor=white)](https://prometheus.io/)
@@ -7,130 +7,92 @@
 [![Python](https://img.shields.io/badge/Runtime-Python%203.11%20AsyncIO-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-An experimental, biologically inspired distributed systems architecture simulating a 19-neuron connectome slice of the *Drosophila melanogaster* nervous system inside a Kubernetes cluster. 
+> [English version](README.en.md) | **Русская версия**
 
-The project demonstrates high-availability distributed computing concepts, microservice mesh resiliency, service discovery over CoreDNS, storm-prevention rate limiting, dual-layer fault recovery (L4 self-healing + L7 socket failover rerouting), and real-time topology visualization through Prometheus Operator and Grafana Node Graph.
+Практический проект для отработки навыков системного инжиниринга и DevOps: кластер из 19 взаимодействующих микросервисов внутри **Kubernetes (Minikube)**.
+
+За основу топологии связей взята графовая структура нейронной цепочки (коннектом дрозофилы), что дает сложную, разветвленную сеть зависимостей. На этом стенде я исследовал и настроил ключевые механизмы отказоустойчивости, маршрутизации и мониторинга микросервисов.
 
 ---
 
-## Architectural Overview
+## 🎯 Что реализовано и протестировано:
 
-FlyOps 2.0 abstracts biological neural circuits into a decentralized microservice graph where each neuron is an autonomous, containerized network unit. Rather than relying on a centralized message broker, neurons communicate directly via peer-to-peer asynchronous HTTP/TCP calls resolved dynamically via Kubernetes cluster DNS.
+1. **Развертывание в Kubernetes:** 19 подов с независимыми ресурсами CPU/RAM, пробами `livenessProbe` / `readinessProbe` и сервисами через Kube-DNS / CoreDNS.
+2. **Отказоустойчивость инфраструктуры (L4):** проверка реакции Kubernetes ReplicaSet при принудительном удалении пода (`kubectl delete pod`) — под автоматически пересоздается и возвращается в строй за 3 секунды.
+3. **Отказоустойчивость приложения (L7 failover):** обработка ошибок сети (код `Errno 111 Connection refused`). Если соседний сервис недоступен, микросервис мгновенно перенаправляет запрос по резервному маршруту.
+4. **Защита от перегрузки (Rate Limiting):** защита от шторма запросов с отсечением избыточного трафика кодом HTTP 429, предотвращающая падение нод по памяти (OOMKilled).
+5. **Сбор метрик и мониторинг:** экспорт метрик в Prometheus через `ServiceMonitor` (CRD Prometheus Operator) и построение живого дашборда с топологией в **Grafana (Node Graph)**.
+
+---
+
+## 📐 Архитектура стенда
+
+Каждый узел — это независимый Python-микросервис в Docker-контейнере. Узлы общаются напрямую через HTTP/REST по внутренним именам CoreDNS (`http://neuron-XX.flyops.svc.cluster.local:8080/stimulate`):
 
 ```
-                           [ EXTERNAL INGRESS / SENSORY PULSE ]
-                                            |
-                                            v
+                         [ ВНЕШНИЙ ЗАПРОС / ТРИГГЕР ]
+                                      |
+                                      v
 +=======================================================================================+
-| SENSORY LAYER (Afferent Ingress)                                                     |
-|                                                                                       |
-|   +---------------+      +---------------+      +---------------+      +---------------+  |
-|   |   Neuron-01   |      |   Neuron-02   |      |   Neuron-03   |      |   Neuron-04   |  |
-|   | [Antenna-L]   |      | [Antenna-R]   |      | [Optic-L]     |      | [Optic-R]     |  |
-|   +-------+-------+      +-------+-------+      +-------+-------+      +-------+-------+  |
-+===========|======================|======================|======================|======+
-            |                      |                      |                      |
-            +------------+---------+                      +----------+-----------+
-                         |                                           |
-                         v                                           v
+| ВХОДНОЙ СЛОЙ (Сенсоры / Ingress: Neuron 01-04)                                        |
 +=======================================================================================+
-| INTERMEDIATE PROCESSING LAYER (Local & Projection Interneurons)                       |
-|                                                                                       |
-|          +--------------------+                   +--------------------+              |
-|          |     Neuron-05      |<=================>|     Neuron-06      |              |
-|          |    (Antennal-L)    |   L7 Cross-Inhib  |    (Antennal-R)    |              |
-|          +---------+----------+                   +----------+---------+              |
-|                    |                                         |                        |
-|                    v                                         v                        |
-|          +--------------------+                   +--------------------+              |
-|          |     Neuron-07      |                   |     Neuron-08      |              |
-|          +---------+----------+                   +----------+---------+              |
-|                    |                                         |                        |
-|                    +--------------------+   +----------------+                        |
-|                                         |   |                                         |
-|                                         v   v                                         |
-|          +-------------------------------------------------------------+              |
-|          |              Central Complex Relay (N09 - N14)              |              |
-|          |  +---------+   +---------+   +---------+   +---------+      |              |
-|          |  | Neu-09  |-->| Neu-10  |-->| Neu-11  |-->| Neu-12  |      |              |
-|          |  +----+----+   +----+----+   +----+----+   +----+----+      |              |
-|          |       |             |             |             |           |              |
-|          |       \-------------+------+------+-------------/           |              |
-|          |                            |                                |              |
-|          |                     +------v------+   L7 Failover Path      |              |
-|          |                     |  Neu-13/14  | - - - - - - - - - - +   |              |
-|          |                     | (Modulators)|                     |   |              |
-|          |                     +------+------+                     |   |              |
-|          +----------------------------|----------------------------|--+              |
-+=======================================|============================|==================+
-                                        |                            |
-                                        v                            v (Alternate Route)
+                                      |
+                                      v
 +=======================================================================================+
-| MOTOR OUTPUT LAYER (Descending / Premotor Neurons)                                    |
+| ПРОМЕЖУТОЧНЫЙ СЛОЙ (Маршрутизация и обработка: Neuron 05-14)                          |
 |                                                                                       |
-|   +---------------+      +---------------+      +---------------+      +---------------+  |
-|   |   Neuron-15   |      |   Neuron-16   |      |   Neuron-17   |      |   Neuron-18/19|  |
-|   | [Wing-L Beat] |      | [Wing-R Beat] |      | [Proboscis]   |      | [Escape Jump] |  |
-|   +---------------+      +---------------+      +---------------+      +---------------+  |
+|   Основной путь: Neu-09 -> Neu-10 -> Neu-11 -> Neu-12                                 |
+|                                                                                       |
+|   Резервный путь (L7 Failover): при сбое узла -> Neu-13/14 -> альтернативный выход     |
++=======================================================================================+
+                                      |
+                                      v
++=======================================================================================+
+| ВЫХОДНОЙ СЛОЙ (Исполнители / Output: Neuron 15-19)                                    |
 +=======================================================================================+
 ```
 
 <p align="center">
-  <img src="docs/Screenshot_1.png" alt="Connectome Neural Wiring Topology" width="850">
+  <img src="docs/Screenshot_1.png" alt="Схема связей стенда" width="850">
   <br>
-  <em>Figure 1: Full 19-neuron connectome communication schema, functional hierarchy, and synaptic routing layers.</em>
+  <em>Схема связей между микросервисами и маршруты передачи запросов.</em>
 </p>
-
-### Microservice Isolation & Pod Mapping
-Every neuron in the connectome operates as a standalone containerized process, decoupled from its peers. Kubernetes manages individual Pod resources, ensuring independent CPU/Memory quotas, liveness lifecycle handling, and direct DNS resolution.
 
 <p align="center">
-  <img src="docs/Screenshot_2.png" alt="Kubernetes Pod Architecture" width="850">
+  <img src="docs/Screenshot_2.png" alt="Поды в кластере Kubernetes" width="850">
   <br>
-  <em>Figure 2: Microservice deployment running each neuron as an autonomous, isolated Kubernetes Pod.</em>
+  <em>Состояние подов в namespace flyops: каждый микросервис работает изолированно.</em>
 </p>
 
-### Core Design Principles
+---
 
-1. **Decentralized Service Discovery**: Nodes query target downstream pods using internal CoreDNS names (`http://neuron-XX.flyops.svc.cluster.local:8080/stimulate`). No central orchestrator dictates routing at runtime.
-2. **Storm Mitigation via Refractory Period (400ms)**: Biological neurons cannot fire immediately after depolarization. FlyOps implements an absolute refractory period of 400 milliseconds per pod. Any stimulus arriving during this window is dropped with a `429 Too Many Requests / Dropped` status. This prevents cascading loops and CPU starvation within circular graph structures.
-3. **Dual-Layer Self-Healing**:
-   - **Layer 4 (Orchestrator Level)**: Kubernetes `ReplicaSet` controllers enforce desired state. If a neuron container experiences an Out-Of-Memory (OOM) or unhandled runtime panic, Kubernetes terminates and recreates the pod, restoring network participation within seconds.
-   - **Layer 7 (Application/Mesh Level)**: If an outbound TCP socket connection times out (> 50ms) or returns an HTTP 5xx error, the sending neuron executes an adaptive fallback routing policy, dynamically redirecting the action potential to an alternate downstream synaptic pathway without dropping the distributed signal chain.
-4. **End-to-End Observability**: Custom Prometheus metrics capture every spike, drop, latency spike, and failover incident. A Grafana Node Graph dashboard visualizes traffic flow, edge latencies, and node health in real time.
+## 🛠️ Практические тесты отказоустойчивости (Chaos Testing)
+
+### Тест 1. Падение пода под нагрузкой (L4 Self-Healing)
+Проверяем работу оркестратора: принудительно убиваем ключевой узел сети и замеряем время восстановления:
+
+```bash
+kubectl delete pod -n flyops -l app=neuron-4490 --now && kubectl get pods -n flyops -l app=neuron-4490
+```
+
+**Результат:** Kubernetes моментально фиксирует несоответствие желаемого числа реплик и поднимает новый чистый под за **3 секунды**.
+
+<p align="center">
+  <img src="docs/Screenshot_4.png" alt="Восстановление пода" width="850">
+  <br>
+  <em>Лог терминала: уничтоженный под автоматически пересоздан и работает через 3 секунды.</em>
+</p>
 
 ---
 
-## Technical Specifications
+### Тест 2. Перемаршрутизация при сетевой ошибке (L7 Failover)
+Удаляем промежуточный узел, на который прямо сейчас идут запросы:
 
-| Parameter | Specification | Description |
-| :--- | :--- | :--- |
-| **Cluster Nodes** | 19 Independent Pods | One Pod per biological neuron archetype |
-| **Namespace** | `flyops` | Isolated virtual cluster network |
-| **Refractory Window** | 400 ms | Bio-inspired rate limiting & loop dampening |
-| **Synaptic Timeout** | 50 ms (configurable) | L7 threshold before initiating reroute |
-| **Network Fabric** | Standard Kube-DNS / CoreDNS | Endpoint resolution across the mesh |
-| **Metrics Collector**| Prometheus Operator (v0.68+) | Automated scraping via `ServiceMonitor` |
-| **Telemetry Format** | Prometheus OpenMetrics | Scraped at `/metrics` on port 8080 |
-| **Visualization** | Grafana (Node Graph Panel) | Visual representation of directed acyclic graph |
+```bash
+kubectl delete pod -n flyops -l app=neuron-8152 --now
+```
 
----
-
-## Resilience & Fault-Tolerance Mechanics
-
-### 1. Storm Suppression & Anti-Resonance
-In an interconnected neural network with recurrent loops, positive feedback can cause an exponential amplification of signals (analogous to a packet storm or broadcast storm). 
-
-FlyOps 2.0 enforces a strict atomic refractory timestamp check inside each neuron's event loop:
-
-$$\Delta t = t_{\text{current}} - t_{\text{last\_depolarization}}$$
-
-$$\text{Action} = \begin{cases} \text{Propagate Spike}, & \text{if } \Delta t \ge 400\text{ ms} \\ \text{Increment Drop Counter \& Abort}, & \text{if } \Delta t < 400\text{ ms} \end{cases}$$
-
-This mathematical barrier guarantees that the network remains bounded and stable even under pathological external ingress loads.
-
-### 2. L7 Dynamic Synaptic Rerouting
-Each neuron maintains an internal adjacency table representing synaptic downstream targets. If the primary target fails to acknowledge the pulse within the configured window, the client initiates a secondary branch:
+**Результат:** Вышестоящий сервис ловит ошибку сокета (`[Errno 111] Connection refused`) и, вместо того чтобы падать с ошибкой 500, переключается на запасной маршрут:
 
 ```python
 async def forward_pulse(primary_target: str, fallback_target: str, payload: dict):
@@ -142,165 +104,23 @@ async def forward_pulse(primary_target: str, fallback_target: str, payload: dict
                     return await resp.json()
     except (asyncio.TimeoutError, aiohttp.ClientError):
         METRICS_FAILOVER.inc()
-        # Fallback to redundant synaptic pathway
+        # Переключение на резервный маршрут
         async with aiohttp.ClientSession() as session:
             async with session.post(fallback_target, json=payload, timeout=0.050) as resp:
                 METRICS_FORWARDED.labels(status="success", route="fallback").inc()
                 return await resp.json()
 ```
 
-### 3. L4 Pod Remediation
-Every neuron deployment defines Kubernetes liveness and readiness probes checking `/healthz`. If memory exhaustion occurs or the Python event loop deadlocks, the kubelet kills the unhealthy container and spawns a clean replacement instance.
-
----
-
-## Repository Structure
-
-```
-FlyOps-2.0/
-├── docs/
-│   ├── Screenshot_1.png              # Connectome hierarchy & topology mapping
-│   ├── Screenshot_2.png              # Autonomous Pod infrastructure status
-│   ├── Screenshot_3.png              # L7 fallback failover terminal output
-│   └── Screenshot_4.png              # L4 ReplicaSet recovery benchmark trace
-├── k8s/
-│   ├── 00-namespace.yaml             # Dedicated 'flyops' namespace definition
-│   ├── 01-configmap-topology.yaml    # Global adjacency matrices & timing configs
-│   ├── 02-neurons-sensory.yaml       # Deployments & Services for Neurons 01-04
-│   ├── 03-neurons-inter.yaml         # Deployments & Services for Neurons 05-14
-│   ├── 04-neurons-motor.yaml         # Deployments & Services for Neurons 15-19
-│   ├── 05-servicemonitor.yaml        # Prometheus Operator scraping configuration
-│   └── 06-network-policies.yaml      # Cluster network boundary security rules
-├── monitoring/
-│   ├── grafana-nodegraph-dash.json   # Ready-to-import Grafana Node Graph dashboard
-│   └── prometheus-rules.yaml         # Alerting rules for packet loss & storm events
-├── src/
-│   ├── app.py                        # Asynchronous neuron server & signal router
-│   ├── config.py                     # Environment variables & threshold parser
-│   ├── metrics.py                    # Prometheus metric collectors definition
-│   ├── requirements.txt              # Minimal Python dependencies (aiohttp, prometheus-client)
-│   └── Dockerfile                    # Multi-stage lightweight distroless/alpine container
-├── scripts/
-│   ├── stimulate.sh                  # External trigger generator to inject action potentials
-│   ├── chaos_kill_node.sh            # Chaos script simulating random node death
-│   └── verify_cluster.sh             # Health verification script
-└── README.md
-```
-
----
-
-## Deployment & Setup Guide
-
-### Prerequisites
-- Linux host machine (Ubuntu 22.04 LTS / Debian 12 recommended)
-- [Minikube](https://minikube.sigs.k8s.io/docs/start/) (v1.30.0+) or local vanilla Kubernetes cluster
-- `kubectl` configured to communicate with the cluster
-- `helm` v3+ (for installing kube-prometheus-stack)
-
-### Step 1: Initialize Minikube Cluster
-Provision a local cluster with sufficient resources to schedule all 19 microservice pods alongside the monitoring infrastructure:
-
-```bash
-minikube start \
-  --cpus=4 \
-  --memory=8192 \
-  --disk-size=25g \
-  --driver=docker \
-  --kubernetes-version=v1.28.3
-```
-
-Verify node readiness:
-```bash
-kubectl get nodes
-```
-
-### Step 2: Deploy Monitoring Infrastructure (Prometheus Operator)
-Install the Prometheus Operator stack to enable `ServiceMonitor` CRD support and Grafana:
-
-```bash
-helm repo add prometheus-community [https://prometheus-community.github.io/helm-charts](https://prometheus-community.github.io/helm-charts)
-helm repo update
-
-helm install monitoring-stack prometheus-community/kube-prometheus-stack \
-  --namespace monitoring \
-  --create-namespace \
-  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
-```
-
-### Step 3: Apply FlyOps Kubernetes Manifests
-Deploy the namespace, shared configurations, the 19 neuron services, and telemetry scrapers:
-
-```bash
-# 1. Create namespace
-kubectl apply -f k8s/00-namespace.yaml
-
-# 2. Apply topology configurations
-kubectl apply -f k8s/01-configmap-topology.yaml
-
-# 3. Deploy all three neural layers
-kubectl apply -f k8s/02-neurons-sensory.yaml
-kubectl apply -f k8s/03-neurons-inter.yaml
-kubectl apply -f k8s/04-neurons-motor.yaml
-
-# 4. Deploy Prometheus scrapers
-kubectl apply -f k8s/05-servicemonitor.yaml
-```
-
-Wait until all 19 neuron pods reach the `Running` state:
-```bash
-kubectl get pods -n flyops -w
-```
-
-Expected output:
-```
-NAME                          READY   STATUS    RESTARTS   AGE
-neuron-01-6f499b4d89-9x2kz    1/1     Running   0          42s
-neuron-02-7c98b6c8d4-m4lw1    1/1     Running   0          42s
-...
-neuron-19-5d475c7b5f-q8v6n    1/1     Running   0          42s
-```
-
----
-
-## Chaos Engineering & Resilience Verification
-
-### Scenario A: Testing L7 Failover Under Node Termination
-Simulate an abrupt failure of an intermediate relay neuron during active pulse transmission:
-
-```bash
-# Forcefully terminate an active processing neuron pod
-kubectl delete pod -n flyops -l app=neuron-8152 --now
-```
-
-**Observed Runtime Behavior**:
-When the target node goes down, upstream callers immediately detect an unroutable socket (`[Errno 111] Connection refused`). Instead of terminating the pulse propagation, the upstream neuron engages the dynamic synaptic backup route in real time.
-
 <p align="center">
-  <img src="docs/Screenshot_3.png" alt="L7 Dynamic Failover Runtime Trace" width="850">
+  <img src="docs/Screenshot_3.png" alt="Лог L7 фейловера" width="850">
   <br>
-  <em>Figure 3: Live terminal log verifying L7 fallback activation: catching Errno 111 and dynamically redirecting signal through the bypass circuit.</em>
+  <em>Терминал фиксирует перехват ошибки Errno 111 и успешную отправку по запасному пути.</em>
 </p>
 
-### Scenario B: Testing L4 Self-Healing on Critical Bottleneck
-Simulate the instant crash of a core bottleneck neuron to verify orchestrator reconciliation:
+---
 
-```bash
-# Crash bottleneck node and monitor recovery time
-kubectl delete pod -n flyops -l app=neuron-4490 --now && \
-kubectl get pods -n flyops -l app=neuron-4490
-```
-
-**Observed Runtime Behavior**:
-The Kubernetes `ReplicaSet` detects state divergence instantly. Within 3 seconds, a replacement pod is scheduled and enters the `Running` state, restoring cluster equilibrium.
-
-<p align="center">
-  <img src="docs/Screenshot_4.png" alt="L4 Bottleneck Pod Self-Healing" width="850">
-  <br>
-  <em>Figure 4: Terminal benchmark proving L4 self-healing: terminated bottleneck pod fully recovered and running in 3 seconds.</em>
-</p>
-
-### Scenario C: Testing Storm Prevention (Anti-Cascade Rate Limiter)
-Flood the sensory inputs with a high-intensity signal (100 requests/second):
+### Тест 3. Стресс-тест и ограничение нагрузки (Rate Limiter)
+Имитируем шторм входящих запросов утилитой `hey` (100+ запросов в секунду):
 
 ```bash
 hey -n 500 -c 10 -m POST \
@@ -309,27 +129,84 @@ hey -n 500 -c 10 -m POST \
   http://$(minikube ip):$(kubectl get svc neuron-01 -n flyops -o jsonpath='{.spec.ports[0].nodePort}')/stimulate
 ```
 
-**Observed Runtime Behavior**:
-- Pods strictly throttle processing to a single pulse per 400 ms window.
-- Excess signals are rejected with HTTP 429 without triggering CPU spikes.
-- Cluster memory remains stable, preventing cascading OOMKilled evictions.
+**Результат:** Сервис пропускает 1 запрос в установленный интервал (400 мс), а избыточный паразитный флуд отсекает кодом `HTTP 429`. Процессор и память узла не перегружаются, кластер остается стабильным.
 
 ---
 
-## Metrics Reference
+## 📊 Мониторинг и метрики (Prometheus & Grafana)
 
-The following custom Prometheus metrics are exposed by each individual microservice on `/metrics`:
+Каждый под отдает метрики в формате OpenMetrics на порту `:8080/metrics`:
 
-| Metric Name | Type | Description |
+| Метрика | Тип | Назначение |
 | :--- | :--- | :--- |
-| `flyops_spikes_received_total` | Counter | Total pulses received by this specific neuron pod |
-| `flyops_spikes_forwarded_total` | Counter | Pulses successfully transmitted downstream (labeled by target) |
-| `flyops_refractory_drops_total` | Counter | Pulses blocked by the 400ms refractory period constraint |
-| `flyops_l7_failover_events_total` | Counter | Count of reroute events triggered due to downstream socket failure |
-| `flyops_propagation_latency_seconds` | Histogram | Round-trip propagation time across individual synaptic jumps |
+| `flyops_spikes_received_total` | Counter | Количество входящих запросов на микросервис |
+| `flyops_spikes_forwarded_total` | Counter | Успешно переданные запросы downstream |
+| `flyops_refractory_drops_total` | Counter | Количество запросов, заблокированных рейт-лимитером |
+| `flyops_l7_failover_events_total` | Counter | Количество переключений на резервные маршруты из-за недоступности сокета |
+| `flyops_propagation_latency_seconds` | Histogram | Задержка сетевого ответа между сервисами |
+
+Метрики собираются автоматически через `ServiceMonitor` и визуализируются в дашборде **Grafana Node Graph**, где отображаются активные связи и задержки.
 
 ---
 
-## License
+## 🚀 Как запустить локально
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+### Требования:
+- Linux (Ubuntu / Debian) или WSL2
+- Docker, Minikube, kubectl, Helm v3+
+
+### Запуск кластера и мониторинга:
+
+```bash
+# 1. Запуск Minikube с запасом ресурсов под поды и мониторинг
+minikube start --cpus=4 --memory=8192 --disk-size=25g --driver=docker
+
+# 2. Установка стека мониторинга (Prometheus Operator + Grafana)
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install monitoring-stack prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --create-namespace \
+  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
+
+# 3. Применение манифестов приложения
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/01-configmap-topology.yaml
+kubectl apply -f k8s/02-neurons-sensory.yaml
+kubectl apply -f k8s/03-neurons-inter.yaml
+kubectl apply -f k8s/04-neurons-motor.yaml
+kubectl apply -f k8s/05-servicemonitor.yaml
+
+# 4. Проверка запуска подов
+kubectl get pods -n flyops
+```
+
+---
+
+## 📁 Структура проекта
+
+```
+FlyOps-2.0/
+├── docs/                             # Скриншоты тестов и метрик
+├── k8s/                              # Декларативные манифесты Kubernetes
+│   ├── 00-namespace.yaml
+│   ├── 01-configmap-topology.yaml
+│   ├── 02-neurons-sensory.yaml
+│   ├── 03-neurons-inter.yaml
+│   ├── 04-neurons-motor.yaml
+│   └── 05-servicemonitor.yaml
+├── monitoring/
+│   ├── grafana-nodegraph-dash.json   # Дашборд Grafana Node Graph
+│   └── prometheus-rules.yaml         # Правила алертов Prometheus
+├── src/
+│   ├── app.py                        # Асинхронный HTTP-сервер микросервиса (aiohttp)
+│   ├── config.py                     # Загрузка топологии и настроек
+│   ├── metrics.py                    # Регистрация метрик Prometheus
+│   └── Dockerfile                    # Сборка легковесного контейнера
+├── scripts/
+│   ├── stimulate.sh                  # Скрипт отправки тестовых запросов
+│   └── chaos_kill_node.sh            # Скрипт симуляции падения подов
+└── README.md
+```
+
+## Лицензия
+MIT
